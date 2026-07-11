@@ -13,7 +13,7 @@
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getDatabase, ref, onValue, set, update, remove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+import { getDatabase, ref, onValue, set, update, remove, push } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
 /* -------------------- FIREBASE CONFIG -------------------- */
 const firebaseConfig = {
@@ -39,7 +39,7 @@ canvas.height = window.innerHeight;
 /* -------------------- PLAYER -------------------- */
 const id = "player_" + Math.random().toString(36).slice(2);
 let players = {};
-let bullets = []; // CLIENT-SIDE ONLY
+let bullets = []; // LOCAL bullets only
 
 let me = {
     x: canvas.width / 2,
@@ -72,7 +72,7 @@ function shoot() {
     if (now - lastShot < 5) return;
     lastShot = now;
 
-    // CLIENT-SIDE BULLET ONLY
+    // Create local bullet
     bullets.push({
         owner: id,
         x: me.x,
@@ -80,7 +80,39 @@ function shoot() {
         angle: me.angle,
         speed: 10
     });
+
+    // Send bullet event to Firebase
+    push(ref(db, "shots"), {
+        owner: id,
+        x: me.x,
+        y: me.y,
+        angle: me.angle
+    });
 }
+
+/* -------------------- RECEIVE SHOT EVENTS -------------------- */
+onValue(ref(db, "shots"), snap => {
+    const data = snap.val();
+    if (!data) return;
+
+    bullets = bullets.filter(b => b.owner === id); // keep my bullets
+
+    for (const sid in data) {
+        const s = data[sid];
+        if (!s) continue;
+
+        // Create bullet locally for other players
+        if (s.owner !== id) {
+            bullets.push({
+                owner: s.owner,
+                x: s.x,
+                y: s.y,
+                angle: s.angle,
+                speed: 10
+            });
+        }
+    }
+});
 
 /* -------------------- MOVEMENT -------------------- */
 function updateMe() {
