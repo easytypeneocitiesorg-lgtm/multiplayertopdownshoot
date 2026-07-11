@@ -36,11 +36,6 @@ const ctx = canvas.getContext("2d");
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
-window.addEventListener("resize", () => {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-});
-
 /* -------------------- PLAYER -------------------- */
 const id = "player_" + Math.random().toString(36).slice(2);
 let players = {};
@@ -50,7 +45,9 @@ let me = {
     x: canvas.width / 2,
     y: canvas.height / 2,
     health: 5,
-    angle: 0
+    angle: 0,
+    alive: true,
+    heartbeat: Date.now()
 };
 
 let keys = {};
@@ -58,34 +55,26 @@ let lastShot = 0;
 const speed = 3;
 
 /* -------------------- INPUT -------------------- */
-document.addEventListener("keydown", e => {
-    keys[e.key] = true;
-});
-
-document.addEventListener("keyup", e => {
-    keys[e.key] = false;
-});
+document.addEventListener("keydown", e => keys[e.key] = true);
+document.addEventListener("keyup", e => keys[e.key] = false);
 
 canvas.addEventListener("mousemove", e => {
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    me.angle = Math.atan2(my - me.y, mx - me.x);
+    me.angle = Math.atan2(e.clientY - me.y, e.clientX - me.x);
 });
 
-canvas.addEventListener("mousedown", () => {
-    shoot();
-});
+canvas.addEventListener("mousedown", () => shoot());
 
 /* -------------------- SHOOT -------------------- */
 function shoot() {
+    if (!me.alive) return;
+
     const now = performance.now();
-    if (now - lastShot < 5) return; // 5 ms delay
+    if (now - lastShot < 5) return;
     lastShot = now;
 
     const bid = "b_" + Math.random().toString(36).slice(2);
 
-    // ONLY write to Firebase, no local bullets[bid] here
+    // Only create bullets in Firebase, no local duplication
     set(ref(db, "bullets/" + bid), {
         id: bid,
         owner: id,
@@ -98,15 +87,17 @@ function shoot() {
 
 /* -------------------- MOVEMENT -------------------- */
 function updateMe() {
+    if (!me.alive) return;
+
     if (keys["w"] || keys["ArrowUp"]) me.y -= speed;
     if (keys["s"] || keys["ArrowDown"]) me.y += speed;
     if (keys["a"] || keys["ArrowLeft"]) me.x -= speed;
     if (keys["d"] || keys["ArrowRight"]) me.x += speed;
 
-    // clamp to screen
     me.x = Math.max(15, Math.min(canvas.width - 15, me.x));
     me.y = Math.max(15, Math.min(canvas.height - 15, me.y));
 
+    me.heartbeat = Date.now();
     update(ref(db, "players/" + id), me);
 }
 
@@ -114,10 +105,9 @@ function updateMe() {
 function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // players
     for (const pid in players) {
         const p = players[pid];
-        if (!p) continue;
+        if (!p || !p.alive) continue;
 
         ctx.fillStyle = pid === id ? "#00ffff" : "red";
         ctx.beginPath();
@@ -125,53 +115,51 @@ function draw() {
         ctx.fill();
 
         ctx.fillStyle = "white";
-        ctx.font = "12px Arial";
-        ctx.fillText(p.health ?? 0, p.x - 5, p.y - 20);
+        ctx.fillText(p.health, p.x - 5, p.y - 20);
     }
 
-    // bullets
     for (const bid in bullets) {
         const b = bullets[bid];
-        if (!b) continue;
-
         ctx.fillStyle = "yellow";
         ctx.beginPath();
         ctx.arc(b.x, b.y, 5, 0, Math.PI * 2);
         ctx.fill();
     }
-
-    // debug overlay
-    ctx.fillStyle = "white";
-    ctx.fillText(`x:${me.x} y:${me.y}`, 20, 20);
 }
 
 /* -------------------- BULLET PHYSICS -------------------- */
 function updateBullets() {
     for (const bid in bullets) {
         const b = bullets[bid];
-        if (!b) continue;
 
+        // Client-only movement (fixes spray)
         b.x += Math.cos(b.angle) * b.speed;
         b.y += Math.sin(b.angle) * b.speed;
 
-        // hit detection
+        // Hit detection
         for (const pid in players) {
-            if (pid === b.owner) continue;
             const p = players[pid];
-            if (!p) continue;
+            if (!p || !p.alive) continue;
+            if (pid === b.owner) continue;
 
             const dx = p.x - b.x;
             const dy = p.y - b.y;
             if (dx * dx + dy * dy < 20 * 20) {
-                const newHealth = (p.health ?? 5) - 1;
+                const newHealth = p.health - 1;
+
                 update(ref(db, "players/" + pid), { health: newHealth });
+
+                if (newHealth <= 0) {
+                    respawnPlayer(pid);
+                }
+
                 remove(ref(db, "bullets/" + bid));
                 delete bullets[bid];
                 break;
             }
         }
 
-        // off-screen
+        // Off-screen
         if (b.x < 0 || b.x > canvas.width || b.y < 0 || b.y > canvas.height) {
             remove(ref(db, "bullets/" + bid));
             delete bullets[bid];
@@ -179,14 +167,38 @@ function updateBullets() {
     }
 }
 
-/* -------------------- MULTIPLAYER SYNC -------------------- */
-onValue(ref(db, "players"), snap => {
-    players = snap.val() || {};
-});
+/* -------------------- RESPAWN -------------------- */
+function respawnPlayer(pid) {
+    update(ref(db, "players/" + pid), { alive: false });
 
-onValue(ref(db, "bullets"), snap => {
-    bullets = snap.val() || {};
-});
+    setTimeout(() => {
+        const px = Math.random() * canvas.width;
+        const py = Math.random() * canvas.height;
+
+        update(ref(db, "players/" + pid), {
+            x: px,
+            y: py,
+            health: 5,
+            alive: true
+        });
+    }, 3000);
+}
+
+/* -------------------- HEARTBEAT CLEANUP -------------------- */
+setInterval(() => {
+    for (const pid in players) {
+        const p = players[pid];
+        if (!p) continue;
+
+        if (Date.now() - p.heartbeat > 3000) {
+            remove(ref(db, "players/" + pid));
+        }
+    }
+}, 1000);
+
+/* -------------------- MULTIPLAYER SYNC -------------------- */
+onValue(ref(db, "players"), snap => players = snap.val() || {});
+onValue(ref(db, "bullets"), snap => bullets = snap.val() || {});
 
 /* -------------------- REGISTER PLAYER -------------------- */
 set(ref(db, "players/" + id), me);
@@ -199,11 +211,6 @@ function loop() {
     requestAnimationFrame(loop);
 }
 loop();
-
-/* -------------------- CLEANUP -------------------- */
-window.addEventListener("beforeunload", () => {
-    remove(ref(db, "players/" + id));
-});
 </script>
 </body>
 </html>
