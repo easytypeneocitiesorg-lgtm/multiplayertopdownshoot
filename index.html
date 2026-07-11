@@ -15,10 +15,11 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getDatabase, ref, onValue, set, update, remove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-/* -------------------- YOUR FIREBASE CONFIG -------------------- */
+/* -------------------- FIREBASE CONFIG -------------------- */
 const firebaseConfig = {
   apiKey: "AIzaSyCPcprDqf0X1rMOCe3R7GgVCBMXX7-L66U",
   authDomain: "multiplayerfps-c3b14.firebaseapp.com",
+  databaseURL: "https://multiplayerfps-c3b14-default-rtdb.firebaseio.com",
   projectId: "multiplayerfps-c3b14",
   storageBucket: "multiplayerfps-c3b14.firebasestorage.app",
   messagingSenderId: "77451030161",
@@ -34,6 +35,11 @@ const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
+
+window.addEventListener("resize", () => {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+});
 
 /* -------------------- PLAYER -------------------- */
 const id = "player_" + Math.random().toString(36).slice(2);
@@ -54,19 +60,29 @@ let keys = {};
 let lastShot = 0;
 
 /* -------------------- INPUT -------------------- */
-document.addEventListener("keydown", e => keys[e.key] = true);
-document.addEventListener("keyup", e => keys[e.key] = false);
-
-canvas.addEventListener("mousemove", e => {
-    me.angle = Math.atan2(e.clientY - me.y, e.clientX - me.x);
+document.addEventListener("keydown", e => {
+    keys[e.key] = true;
 });
 
-canvas.addEventListener("mousedown", () => shoot());
+document.addEventListener("keyup", e => {
+    keys[e.key] = false;
+});
+
+canvas.addEventListener("mousemove", e => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    me.angle = Math.atan2(my - me.y, mx - me.x);
+});
+
+canvas.addEventListener("mousedown", () => {
+    shoot();
+});
 
 /* -------------------- SHOOT -------------------- */
 function shoot() {
     const now = performance.now();
-    if (now - lastShot < 5) return; // 5ms delay
+    if (now - lastShot < 5) return; // 5 ms delay
     lastShot = now;
 
     const bid = "b_" + Math.random().toString(36).slice(2);
@@ -85,13 +101,20 @@ function shoot() {
 
 /* -------------------- MOVEMENT -------------------- */
 function updateMe() {
-    me.vx = (keys["w"] || keys["ArrowUp"] ? -speed : 0) +
-            (keys["s"] || keys["ArrowDown"] ? speed : 0);
-    me.vy = (keys["a"] || keys["ArrowLeft"] ? -speed : 0) +
-            (keys["d"] || keys["ArrowRight"] ? speed : 0);
+    let vy = 0;
+    let vx = 0;
 
-    me.y += me.vx;
-    me.x += me.vy;
+    if (keys["w"] || keys["ArrowUp"]) vy -= speed;
+    if (keys["s"] || keys["ArrowDown"]) vy += speed;
+    if (keys["a"] || keys["ArrowLeft"]) vx -= speed;
+    if (keys["d"] || keys["ArrowRight"]) vx += speed;
+
+    me.x += vx;
+    me.y += vy;
+
+    // clamp to screen
+    me.x = Math.max(15, Math.min(canvas.width - 15, me.x));
+    me.y = Math.max(15, Math.min(canvas.height - 15, me.y));
 
     update(ref(db, "players/" + id), me);
 }
@@ -100,21 +123,26 @@ function updateMe() {
 function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw players
+    // players
     for (const pid in players) {
         const p = players[pid];
+        if (!p) continue;
+
         ctx.fillStyle = pid === id ? "blue" : "red";
         ctx.beginPath();
         ctx.arc(p.x, p.y, 15, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.fillStyle = "white";
-        ctx.fillText(p.health, p.x - 5, p.y - 20);
+        ctx.font = "12px Arial";
+        ctx.fillText(p.health ?? 0, p.x - 5, p.y - 20);
     }
 
-    // Draw bullets
+    // bullets
     for (const bid in bullets) {
         const b = bullets[bid];
+        if (!b) continue;
+
         ctx.fillStyle = "yellow";
         ctx.beginPath();
         ctx.arc(b.x, b.y, 5, 0, Math.PI * 2);
@@ -126,24 +154,29 @@ function draw() {
 function updateBullets() {
     for (const bid in bullets) {
         const b = bullets[bid];
+        if (!b) continue;
+
         b.x += Math.cos(b.angle) * b.speed;
         b.y += Math.sin(b.angle) * b.speed;
 
-        // Hit detection
+        // hit detection
         for (const pid in players) {
             if (pid === b.owner) continue;
             const p = players[pid];
+            if (!p) continue;
+
             const dx = p.x - b.x;
             const dy = p.y - b.y;
-            if (dx*dx + dy*dy < 20*20) {
-                p.health -= 1;
-                update(ref(db, "players/" + pid), { health: p.health });
+            if (dx * dx + dy * dy < 20 * 20) {
+                const newHealth = (p.health ?? 5) - 1;
+                update(ref(db, "players/" + pid), { health: newHealth });
                 remove(ref(db, "bullets/" + bid));
                 delete bullets[bid];
+                break;
             }
         }
 
-        // Remove off-screen
+        // off-screen
         if (b.x < 0 || b.x > canvas.width || b.y < 0 || b.y > canvas.height) {
             remove(ref(db, "bullets/" + bid));
             delete bullets[bid];
