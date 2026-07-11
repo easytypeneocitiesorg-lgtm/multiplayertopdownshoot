@@ -1,87 +1,84 @@
 <!DOCTYPE html>
 <html>
-<head>
-<meta charset="UTF-8">
-<title>Dot Shooter Multiplayer</title>
-<style>
-    body { margin:0; overflow:hidden; background:#000; }
-    canvas { background:#111; display:block; }
-</style>
-</head>
-<body>
-<canvas id="game"></canvas>
-
+<body style="margin:0; overflow:hidden; background:black;">
+<canvas id="gameCanvas"></canvas>
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getDatabase, ref, onValue, set, update, push, onDisconnect } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+  import { getDatabase, ref, onValue, set, update, push, onChildAdded } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
 
-const firebaseConfig = {
-    apiKey: "AIzaSyCPcprDqf0X1rMOCe3R7gVCBMXX7-L66U",
+  const firebaseConfig = {
+    apiKey: "AIzaSyCPcprDqf0X1rMOCe3R7GgVCBMXX7-L66U",
     authDomain: "multiplayerfps-c3b14.firebaseapp.com",
-    databaseURL: "https://multiplayerfps-c3b14-default-rtdb.firebaseio.com",
     projectId: "multiplayerfps-c3b14",
     storageBucket: "multiplayerfps-c3b14.firebasestorage.app",
     messagingSenderId: "77451030161",
     appId: "1:77451030161:web:6d49eb99683605ba491930",
     measurementId: "G-SS2V9LRY5E"
-};
+  };
 
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d");
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
 
-// --- Game Logic ---
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+  const myId = "player_" + Math.random().toString(36).substr(2, 9);
+  let myData = { x: 100, y: 100, health: 5, respawning: false };
+  let allPlayers = {};
+  let lastShot = 0;
 
-const id = "player_" + crypto.randomUUID();
-let players = {}, positions = {}, bullets = {};
-let myPos = { x: canvas.width/2, y: canvas.height/2, angle: 0 };
-const speed = 3;
-let keys = {};
+  // Sync Players
+  onValue(ref(db, 'players/'), (snapshot) => {
+    allPlayers = snapshot.val() || {};
+    draw();
+  });
 
-onValue(ref(db, "players"), snap => players = snap.val() || {});
-onValue(ref(db, "positions"), snap => positions = snap.val() || {});
-
-async function joinGame() {
-    await set(ref(db, "players/" + id), { alive: true, heartbeat: Date.now() });
-    await set(ref(db, "positions/" + id), myPos);
-    onDisconnect(ref(db, "players/" + id)).remove();
-    onDisconnect(ref(db, "positions/" + id)).remove();
-}
-joinGame();
-
-function shoot() {
-    push(ref(db, "bullets"), { x: myPos.x, y: myPos.y, angle: myPos.angle, sender: id });
-}
-
-function updateMovement() {
-    if (keys["w"]) myPos.y -= speed;
-    if (keys["s"]) myPos.y += speed;
-    if (keys["a"]) myPos.x -= speed;
-    if (keys["d"]) myPos.x += speed;
-    update(ref(db, "positions/" + id), myPos);
-}
-
-function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    for (let pId in positions) {
-        let p = positions[pId];
-        ctx.fillStyle = pId === id ? "lime" : "red";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
-        ctx.fill();
+  // Movement
+  window.addEventListener('keydown', (e) => {
+    if(myData.respawning) return;
+    if (['w', 'a', 's', 'd'].includes(e.key)) {
+      if (e.key === 'w') myData.y -= 10;
+      if (e.key === 's') myData.y += 10;
+      if (e.key === 'a') myData.x -= 10;
+      if (e.key === 'd') myData.x += 10;
+      update(ref(db, 'players/' + myId), myData);
     }
-    updateMovement();
-    requestAnimationFrame(draw);
-}
+  });
 
-document.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
-document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
-canvas.addEventListener("mousedown", shoot);
+  // Shooting
+  window.addEventListener('click', (e) => {
+    const now = Date.now();
+    if (now - lastShot > 5) {
+      // Basic hit logic: Check if cursor is on any player
+      Object.entries(allPlayers).forEach(([id, p]) => {
+        if (id !== myId && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 20) {
+          if (p.health > 1) {
+            update(ref(db, 'players/' + id), { health: p.health - 1 });
+          } else {
+            // Respawn Logic
+            update(ref(db, 'players/' + id), { health: 5, x: Math.random()*500, y: Math.random()*500, respawning: true });
+            setTimeout(() => update(ref(db, 'players/' + id), { respawning: false }), 3000);
+          }
+        }
+      });
+      lastShot = now;
+    }
+  });
 
-draw();
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    Object.entries(allPlayers).forEach(([id, p]) => {
+      if (p.respawning) return;
+      ctx.fillStyle = (id === myId) ? "blue" : "red";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+  
+  // Join Game
+  set(ref(db, 'players/' + myId), myData);
 </script>
 </body>
 </html>
