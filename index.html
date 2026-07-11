@@ -38,16 +38,21 @@ canvas.height = window.innerHeight;
 
 /* -------------------- PLAYER -------------------- */
 const id = "player_" + Math.random().toString(36).slice(2);
-let players = {};
-let bullets = []; // LOCAL bullets only
+
+let players = {};      // health + alive
+let positions = {};    // x + y + angle
+let bullets = [];      // local bullets only
 
 let me = {
-    x: canvas.width / 2,
-    y: canvas.height / 2,
     health: 5,
-    angle: 0,
     alive: true,
     heartbeat: Date.now()
+};
+
+let myPos = {
+    x: canvas.width / 2,
+    y: canvas.height / 2,
+    angle: 0
 };
 
 let keys = {};
@@ -59,7 +64,7 @@ document.addEventListener("keydown", e => keys[e.key] = true);
 document.addEventListener("keyup", e => keys[e.key] = false);
 
 canvas.addEventListener("mousemove", e => {
-    me.angle = Math.atan2(e.clientY - me.y, e.clientX - me.x);
+    myPos.angle = Math.atan2(e.clientY - myPos.y, e.clientX - myPos.x);
 });
 
 canvas.addEventListener("mousedown", () => shoot());
@@ -72,36 +77,31 @@ function shoot() {
     if (now - lastShot < 5) return;
     lastShot = now;
 
-    // Create local bullet
     bullets.push({
         owner: id,
-        x: me.x,
-        y: me.y,
-        angle: me.angle,
+        x: myPos.x,
+        y: myPos.y,
+        angle: myPos.angle,
         speed: 10
     });
 
-    // Send bullet event to Firebase
     push(ref(db, "shots"), {
         owner: id,
-        x: me.x,
-        y: me.y,
-        angle: me.angle
+        x: myPos.x,
+        y: myPos.y,
+        angle: myPos.angle
     });
 }
 
-/* -------------------- RECEIVE SHOT EVENTS -------------------- */
+/* -------------------- RECEIVE SHOTS -------------------- */
 onValue(ref(db, "shots"), snap => {
     const data = snap.val();
     if (!data) return;
-
-    bullets = bullets.filter(b => b.owner === id); // keep my bullets
 
     for (const sid in data) {
         const s = data[sid];
         if (!s) continue;
 
-        // Create bullet locally for other players
         if (s.owner !== id) {
             bullets.push({
                 owner: s.owner,
@@ -115,16 +115,18 @@ onValue(ref(db, "shots"), snap => {
 });
 
 /* -------------------- MOVEMENT -------------------- */
-function updateMe() {
+function updateMovement() {
     if (!me.alive) return;
 
-    if (keys["w"] || keys["ArrowUp"]) me.y -= speed;
-    if (keys["s"] || keys["ArrowDown"]) me.y += speed;
-    if (keys["a"] || keys["ArrowLeft"]) me.x -= speed;
-    if (keys["d"] || keys["ArrowRight"]) me.x += speed;
+    if (keys["w"] || keys["ArrowUp"]) myPos.y -= speed;
+    if (keys["s"] || keys["ArrowDown"]) myPos.y += speed;
+    if (keys["a"] || keys["ArrowLeft"]) myPos.x -= speed;
+    if (keys["d"] || keys["ArrowRight"]) myPos.x += speed;
 
-    me.x = Math.max(15, Math.min(canvas.width - 15, me.x));
-    me.y = Math.max(15, Math.min(canvas.height - 15, me.y));
+    myPos.x = Math.max(15, Math.min(canvas.width - 15, myPos.x));
+    myPos.y = Math.max(15, Math.min(canvas.height - 15, myPos.y));
+
+    update(ref(db, "positions/" + id), myPos);
 
     me.heartbeat = Date.now();
     update(ref(db, "players/" + id), me);
@@ -134,21 +136,20 @@ function updateMe() {
 function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // players
     for (const pid in players) {
         const p = players[pid];
-        if (!p || !p.alive) continue;
+        const pos = positions[pid];
+        if (!p || !pos || !p.alive) continue;
 
         ctx.fillStyle = pid === id ? "#00ffff" : "red";
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 15, 0, Math.PI * 2);
+        ctx.arc(pos.x, pos.y, 15, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.fillStyle = "white";
-        ctx.fillText(p.health, p.x - 5, p.y - 20);
+        ctx.fillText(p.health, pos.x - 5, pos.y - 20);
     }
 
-    // bullets
     for (const b of bullets) {
         ctx.fillStyle = "yellow";
         ctx.beginPath();
@@ -165,29 +166,26 @@ function updateBullets() {
         b.x += Math.cos(b.angle) * b.speed;
         b.y += Math.sin(b.angle) * b.speed;
 
-        // hit detection
         for (const pid in players) {
             const p = players[pid];
-            if (!p || !p.alive) continue;
+            const pos = positions[pid];
+            if (!p || !pos || !p.alive) continue;
             if (pid === b.owner) continue;
 
-            const dx = p.x - b.x;
-            const dy = p.y - b.y;
+            const dx = pos.x - b.x;
+            const dy = pos.y - b.y;
             if (dx * dx + dy * dy < 20 * 20) {
                 const newHealth = p.health - 1;
 
                 update(ref(db, "players/" + pid), { health: newHealth });
 
-                if (newHealth <= 0) {
-                    respawnPlayer(pid);
-                }
+                if (newHealth <= 0) respawn(pid);
 
                 bullets.splice(i, 1);
                 break;
             }
         }
 
-        // off-screen
         if (b.x < 0 || b.x > canvas.width || b.y < 0 || b.y > canvas.height) {
             bullets.splice(i, 1);
         }
@@ -195,16 +193,20 @@ function updateBullets() {
 }
 
 /* -------------------- RESPAWN -------------------- */
-function respawnPlayer(pid) {
+function respawn(pid) {
     update(ref(db, "players/" + pid), { alive: false });
 
     setTimeout(() => {
         const px = Math.random() * canvas.width;
         const py = Math.random() * canvas.height;
 
-        update(ref(db, "players/" + pid), {
+        update(ref(db, "positions/" + pid), {
             x: px,
             y: py,
+            angle: 0
+        });
+
+        update(ref(db, "players/" + pid), {
             health: 5,
             alive: true
         });
@@ -219,19 +221,22 @@ setInterval(() => {
 
         if (Date.now() - p.heartbeat > 3000) {
             remove(ref(db, "players/" + pid));
+            remove(ref(db, "positions/" + pid));
         }
     }
 }, 1000);
 
 /* -------------------- MULTIPLAYER SYNC -------------------- */
 onValue(ref(db, "players"), snap => players = snap.val() || {});
+onValue(ref(db, "positions"), snap => positions = snap.val() || {});
 
 /* -------------------- REGISTER PLAYER -------------------- */
 set(ref(db, "players/" + id), me);
+set(ref(db, "positions/" + id), myPos);
 
 /* -------------------- GAME LOOP -------------------- */
 function loop() {
-    updateMe();
+    updateMovement();
     updateBullets();
     draw();
     requestAnimationFrame(loop);
