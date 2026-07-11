@@ -39,7 +39,7 @@ canvas.height = window.innerHeight;
 /* -------------------- PLAYER -------------------- */
 const id = "player_" + Math.random().toString(36).slice(2);
 let players = {};
-let bullets = {};
+let bullets = []; // CLIENT-SIDE ONLY
 
 let me = {
     x: canvas.width / 2,
@@ -72,11 +72,8 @@ function shoot() {
     if (now - lastShot < 5) return;
     lastShot = now;
 
-    const bid = "b_" + Math.random().toString(36).slice(2);
-
-    // Only create bullets in Firebase, no local duplication
-    set(ref(db, "bullets/" + bid), {
-        id: bid,
+    // CLIENT-SIDE BULLET ONLY
+    bullets.push({
         owner: id,
         x: me.x,
         y: me.y,
@@ -105,6 +102,7 @@ function updateMe() {
 function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // players
     for (const pid in players) {
         const p = players[pid];
         if (!p || !p.alive) continue;
@@ -118,8 +116,8 @@ function draw() {
         ctx.fillText(p.health, p.x - 5, p.y - 20);
     }
 
-    for (const bid in bullets) {
-        const b = bullets[bid];
+    // bullets
+    for (const b of bullets) {
         ctx.fillStyle = "yellow";
         ctx.beginPath();
         ctx.arc(b.x, b.y, 5, 0, Math.PI * 2);
@@ -129,14 +127,13 @@ function draw() {
 
 /* -------------------- BULLET PHYSICS -------------------- */
 function updateBullets() {
-    for (const bid in bullets) {
-        const b = bullets[bid];
+    for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
 
-        // Client-only movement (fixes spray)
         b.x += Math.cos(b.angle) * b.speed;
         b.y += Math.sin(b.angle) * b.speed;
 
-        // Hit detection
+        // hit detection
         for (const pid in players) {
             const p = players[pid];
             if (!p || !p.alive) continue;
@@ -153,16 +150,14 @@ function updateBullets() {
                     respawnPlayer(pid);
                 }
 
-                remove(ref(db, "bullets/" + bid));
-                delete bullets[bid];
+                bullets.splice(i, 1);
                 break;
             }
         }
 
-        // Off-screen
+        // off-screen
         if (b.x < 0 || b.x > canvas.width || b.y < 0 || b.y > canvas.height) {
-            remove(ref(db, "bullets/" + bid));
-            delete bullets[bid];
+            bullets.splice(i, 1);
         }
     }
 }
@@ -198,7 +193,6 @@ setInterval(() => {
 
 /* -------------------- MULTIPLAYER SYNC -------------------- */
 onValue(ref(db, "players"), snap => players = snap.val() || {});
-onValue(ref(db, "bullets"), snap => bullets = snap.val() || {});
 
 /* -------------------- REGISTER PLAYER -------------------- */
 set(ref(db, "players/" + id), me);
