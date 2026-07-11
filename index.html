@@ -49,15 +49,13 @@ let bullets = {};
 let me = {
     x: canvas.width / 2,
     y: canvas.height / 2,
-    vx: 0,
-    vy: 0,
     health: 5,
     angle: 0
 };
 
-const speed = 3;
 let keys = {};
 let lastShot = 0;
+const speed = 3;
 
 /* -------------------- INPUT -------------------- */
 document.addEventListener("keydown", e => {
@@ -86,31 +84,24 @@ function shoot() {
     lastShot = now;
 
     const bid = "b_" + Math.random().toString(36).slice(2);
-    const bullet = {
+
+    // ONLY write to Firebase, no local bullets[bid] here
+    set(ref(db, "bullets/" + bid), {
         id: bid,
         owner: id,
         x: me.x,
         y: me.y,
         angle: me.angle,
         speed: 10
-    };
-
-    bullets[bid] = bullet;
-    set(ref(db, "bullets/" + bid), bullet);
+    });
 }
 
 /* -------------------- MOVEMENT -------------------- */
 function updateMe() {
-    let vy = 0;
-    let vx = 0;
-
-    if (keys["w"] || keys["ArrowUp"]) vy -= speed;
-    if (keys["s"] || keys["ArrowDown"]) vy += speed;
-    if (keys["a"] || keys["ArrowLeft"]) vx -= speed;
-    if (keys["d"] || keys["ArrowRight"]) vx += speed;
-
-    me.x += vx;
-    me.y += vy;
+    if (keys["w"] || keys["ArrowUp"]) me.y -= speed;
+    if (keys["s"] || keys["ArrowDown"]) me.y += speed;
+    if (keys["a"] || keys["ArrowLeft"]) me.x -= speed;
+    if (keys["d"] || keys["ArrowRight"]) me.x += speed;
 
     // clamp to screen
     me.x = Math.max(15, Math.min(canvas.width - 15, me.x));
@@ -128,7 +119,7 @@ function draw() {
         const p = players[pid];
         if (!p) continue;
 
-        ctx.fillStyle = pid === id ? "blue" : "red";
+        ctx.fillStyle = pid === id ? "#00ffff" : "red";
         ctx.beginPath();
         ctx.arc(p.x, p.y, 15, 0, Math.PI * 2);
         ctx.fill();
@@ -148,6 +139,10 @@ function draw() {
         ctx.arc(b.x, b.y, 5, 0, Math.PI * 2);
         ctx.fill();
     }
+
+    // debug overlay
+    ctx.fillStyle = "white";
+    ctx.fillText(`x:${me.x} y:${me.y}`, 20, 20);
 }
 
 /* -------------------- BULLET PHYSICS -------------------- */
