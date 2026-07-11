@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Dot Shooter Multiplayer</title>
+<style>
+    body { margin:0; overflow:hidden; background:#000; }
+    canvas { background:#111; display:block; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getDatabase, ref, onValue, set, update, remove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+/* -------------------- YOUR FIREBASE CONFIG -------------------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyCPcprDqf0X1rMOCe3R7GgVCBMXX7-L66U",
+  authDomain: "multiplayerfps-c3b14.firebaseapp.com",
+  projectId: "multiplayerfps-c3b14",
+  storageBucket: "multiplayerfps-c3b14.firebasestorage.app",
+  messagingSenderId: "77451030161",
+  appId: "1:77451030161:web:6d49eb99683605ba491930",
+  measurementId: "G-SS2V9LRY5E"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+/* -------------------- CANVAS -------------------- */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+/* -------------------- PLAYER -------------------- */
+const id = "player_" + Math.random().toString(36).slice(2);
+let players = {};
+let bullets = {};
+
+let me = {
+    x: canvas.width / 2,
+    y: canvas.height / 2,
+    vx: 0,
+    vy: 0,
+    health: 5,
+    angle: 0
+};
+
+const speed = 3;
+let keys = {};
+let lastShot = 0;
+
+/* -------------------- INPUT -------------------- */
+document.addEventListener("keydown", e => keys[e.key] = true);
+document.addEventListener("keyup", e => keys[e.key] = false);
+
+canvas.addEventListener("mousemove", e => {
+    me.angle = Math.atan2(e.clientY - me.y, e.clientX - me.x);
+});
+
+canvas.addEventListener("mousedown", () => shoot());
+
+/* -------------------- SHOOT -------------------- */
+function shoot() {
+    const now = performance.now();
+    if (now - lastShot < 5) return; // 5ms delay
+    lastShot = now;
+
+    const bid = "b_" + Math.random().toString(36).slice(2);
+    const bullet = {
+        id: bid,
+        owner: id,
+        x: me.x,
+        y: me.y,
+        angle: me.angle,
+        speed: 10
+    };
+
+    bullets[bid] = bullet;
+    set(ref(db, "bullets/" + bid), bullet);
+}
+
+/* -------------------- MOVEMENT -------------------- */
+function updateMe() {
+    me.vx = (keys["w"] || keys["ArrowUp"] ? -speed : 0) +
+            (keys["s"] || keys["ArrowDown"] ? speed : 0);
+    me.vy = (keys["a"] || keys["ArrowLeft"] ? -speed : 0) +
+            (keys["d"] || keys["ArrowRight"] ? speed : 0);
+
+    me.y += me.vx;
+    me.x += me.vy;
+
+    update(ref(db, "players/" + id), me);
+}
+
+/* -------------------- DRAW -------------------- */
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw players
+    for (const pid in players) {
+        const p = players[pid];
+        ctx.fillStyle = pid === id ? "blue" : "red";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 15, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "white";
+        ctx.fillText(p.health, p.x - 5, p.y - 20);
+    }
+
+    // Draw bullets
+    for (const bid in bullets) {
+        const b = bullets[bid];
+        ctx.fillStyle = "yellow";
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+/* -------------------- BULLET PHYSICS -------------------- */
+function updateBullets() {
+    for (const bid in bullets) {
+        const b = bullets[bid];
+        b.x += Math.cos(b.angle) * b.speed;
+        b.y += Math.sin(b.angle) * b.speed;
+
+        // Hit detection
+        for (const pid in players) {
+            if (pid === b.owner) continue;
+            const p = players[pid];
+            const dx = p.x - b.x;
+            const dy = p.y - b.y;
+            if (dx*dx + dy*dy < 20*20) {
+                p.health -= 1;
+                update(ref(db, "players/" + pid), { health: p.health });
+                remove(ref(db, "bullets/" + bid));
+                delete bullets[bid];
+            }
+        }
+
+        // Remove off-screen
+        if (b.x < 0 || b.x > canvas.width || b.y < 0 || b.y > canvas.height) {
+            remove(ref(db, "bullets/" + bid));
+            delete bullets[bid];
+        }
+    }
+}
+
+/* -------------------- MULTIPLAYER SYNC -------------------- */
+onValue(ref(db, "players"), snap => {
+    players = snap.val() || {};
+});
+
+onValue(ref(db, "bullets"), snap => {
+    bullets = snap.val() || {};
+});
+
+/* -------------------- REGISTER PLAYER -------------------- */
+set(ref(db, "players/" + id), me);
+
+/* -------------------- GAME LOOP -------------------- */
+function loop() {
+    updateMe();
+    updateBullets();
+    draw();
+    requestAnimationFrame(loop);
+}
+loop();
+
+/* -------------------- CLEANUP -------------------- */
+window.addEventListener("beforeunload", () => {
+    remove(ref(db, "players/" + id));
+});
+</script>
+</body>
+</html>
