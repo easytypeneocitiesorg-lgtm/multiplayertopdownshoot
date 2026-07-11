@@ -4,7 +4,7 @@
 <canvas id="gameCanvas"></canvas>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
-  import { getDatabase, ref, onValue, set, update, push, onChildAdded, onDisconnect } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
+  import { getDatabase, ref, onValue, set, update, push, onChildAdded, onChildRemoved, onDisconnect, remove } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyCPcprDqf0X1rMOCe3R7GgVCBMXX7-L66U",
@@ -24,64 +24,79 @@
   canvas.height = window.innerHeight;
 
   const myId = "p_" + Math.random().toString(36).substr(2, 9);
-  let player = { x: 100, y: 100, health: 5, respawning: false };
+  let player = { x: 100, y: 100, health: 5 };
   let allPlayers = {};
+  let bullets = {};
   let keys = {};
   let lastShot = 0;
 
-  // Track Keys
   window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
   window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
 
-  // Sync Data
-  onValue(ref(db, 'players/'), (snapshot) => { allPlayers = snapshot.val() || {}; });
+  // Sync Players and Bullets
+  onValue(ref(db, 'players/'), (snap) => { allPlayers = snap.val() || {}; });
+  onValue(ref(db, 'bullets/'), (snap) => { bullets = snap.val() || {}; });
 
-  // Handle Shooting (Local Calculation)
+  // Shooting: Create bullet object
   window.addEventListener('mousedown', (e) => {
-    if (Date.now() - lastShot < 5) return; // 5ms delay
+    if (Date.now() - lastShot < 20) return; // 20ms delay
     lastShot = Date.now();
-    
-    // Check collisions locally to save bandwidth
-    Object.entries(allPlayers).forEach(([id, p]) => {
-      if (id !== myId && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 20) {
-        let newHealth = p.health - 1;
-        if (newHealth <= 0) {
-          update(ref(db, 'players/' + id), { health: 5, x: Math.random() * 500, y: Math.random() * 500 });
-        } else {
-          update(ref(db, 'players/' + id), { health: newHealth });
-        }
-      }
+    push(ref(db, 'bullets/'), {
+      x: player.x, y: player.y,
+      vx: (e.clientX - player.x) / 20,
+      vy: (e.clientY - player.y) / 20,
+      owner: myId
     });
   });
 
-  // Game Loop
-  function updateGame() {
-    if (!player.respawning) {
-      if (keys['w']) player.y -= 5;
-      if (keys['s']) player.y += 5;
-      if (keys['a']) player.x -= 5;
-      if (keys['d']) player.x += 5;
-      update(ref(db, 'players/' + myId), player);
-    }
+  function gameLoop() {
+    // Movement
+    if (keys['w']) player.y -= 2;
+    if (keys['s']) player.y += 2;
+    if (keys['a']) player.x -= 2;
+    if (keys['d']) player.x += 2;
+    update(ref(db, 'players/' + myId), player);
 
-    // Draw
+    // Render
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw Players
     Object.entries(allPlayers).forEach(([id, p]) => {
       ctx.fillStyle = (id === myId) ? "blue" : "red";
       ctx.beginPath();
       ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = "white";
-      ctx.fillText(p.health, p.x - 5, p.y - 15);
     });
-    requestAnimationFrame(updateGame);
+
+    // Draw/Update Bullets
+    Object.entries(bullets).forEach(([id, b]) => {
+      b.x += b.vx; b.y += b.vy;
+      ctx.fillStyle = "yellow";
+      ctx.fillRect(b.x, b.y, 4, 4);
+      
+      // Collision (Only owner of the game client checks hits to avoid double-counting)
+      Object.entries(allPlayers).forEach(([pid, p]) => {
+        if (Math.hypot(b.x - p.x, b.y - p.y) < 15 && pid !== b.owner) {
+          if (pid === myId) { // Only update if I am the one being hit
+            let newH = Math.max(0, player.health - 1);
+            if (newH === 0) {
+              player = { x: Math.random() * 500, y: Math.random() * 500, health: 5 };
+            } else {
+              player.health = newH;
+            }
+            update(ref(db, 'players/' + myId), player);
+          }
+        }
+      });
+    });
+    requestAnimationFrame(gameLoop);
   }
 
-  // Setup Player
+  // Init
   const pRef = ref(db, 'players/' + myId);
   set(pRef, player);
   onDisconnect(pRef).remove();
-  updateGame();
+  gameLoop();
 </script>
 </body>
 </html>
