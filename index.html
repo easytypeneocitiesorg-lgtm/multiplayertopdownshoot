@@ -4,7 +4,7 @@
 <canvas id="gameCanvas"></canvas>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
-  import { getDatabase, ref, onValue, set, update, push, onChildAdded } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
+  import { getDatabase, ref, onValue, set, update, push, onChildAdded, onDisconnect } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyCPcprDqf0X1rMOCe3R7GgVCBMXX7-L66U",
@@ -23,62 +23,65 @@
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
 
-  const myId = "player_" + Math.random().toString(36).substr(2, 9);
-  let myData = { x: 100, y: 100, health: 5, respawning: false };
+  const myId = "p_" + Math.random().toString(36).substr(2, 9);
+  let player = { x: 100, y: 100, health: 5, respawning: false };
   let allPlayers = {};
+  let keys = {};
   let lastShot = 0;
 
-  // Sync Players
-  onValue(ref(db, 'players/'), (snapshot) => {
-    allPlayers = snapshot.val() || {};
-    draw();
-  });
+  // Track Keys
+  window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+  window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
 
-  // Movement
-  window.addEventListener('keydown', (e) => {
-    if(myData.respawning) return;
-    if (['w', 'a', 's', 'd'].includes(e.key)) {
-      if (e.key === 'w') myData.y -= 10;
-      if (e.key === 's') myData.y += 10;
-      if (e.key === 'a') myData.x -= 10;
-      if (e.key === 'd') myData.x += 10;
-      update(ref(db, 'players/' + myId), myData);
-    }
-  });
+  // Sync Data
+  onValue(ref(db, 'players/'), (snapshot) => { allPlayers = snapshot.val() || {}; });
 
-  // Shooting
-  window.addEventListener('click', (e) => {
-    const now = Date.now();
-    if (now - lastShot > 5) {
-      // Basic hit logic: Check if cursor is on any player
-      Object.entries(allPlayers).forEach(([id, p]) => {
-        if (id !== myId && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 20) {
-          if (p.health > 1) {
-            update(ref(db, 'players/' + id), { health: p.health - 1 });
-          } else {
-            // Respawn Logic
-            update(ref(db, 'players/' + id), { health: 5, x: Math.random()*500, y: Math.random()*500, respawning: true });
-            setTimeout(() => update(ref(db, 'players/' + id), { respawning: false }), 3000);
-          }
+  // Handle Shooting (Local Calculation)
+  window.addEventListener('mousedown', (e) => {
+    if (Date.now() - lastShot < 5) return; // 5ms delay
+    lastShot = Date.now();
+    
+    // Check collisions locally to save bandwidth
+    Object.entries(allPlayers).forEach(([id, p]) => {
+      if (id !== myId && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 20) {
+        let newHealth = p.health - 1;
+        if (newHealth <= 0) {
+          update(ref(db, 'players/' + id), { health: 5, x: Math.random() * 500, y: Math.random() * 500 });
+        } else {
+          update(ref(db, 'players/' + id), { health: newHealth });
         }
-      });
-      lastShot = now;
-    }
+      }
+    });
   });
 
-  function draw() {
+  // Game Loop
+  function updateGame() {
+    if (!player.respawning) {
+      if (keys['w']) player.y -= 5;
+      if (keys['s']) player.y += 5;
+      if (keys['a']) player.x -= 5;
+      if (keys['d']) player.x += 5;
+      update(ref(db, 'players/' + myId), player);
+    }
+
+    // Draw
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     Object.entries(allPlayers).forEach(([id, p]) => {
-      if (p.respawning) return;
       ctx.fillStyle = (id === myId) ? "blue" : "red";
       ctx.beginPath();
       ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
       ctx.fill();
+      ctx.fillStyle = "white";
+      ctx.fillText(p.health, p.x - 5, p.y - 15);
     });
+    requestAnimationFrame(updateGame);
   }
-  
-  // Join Game
-  set(ref(db, 'players/' + myId), myData);
+
+  // Setup Player
+  const pRef = ref(db, 'players/' + myId);
+  set(pRef, player);
+  onDisconnect(pRef).remove();
+  updateGame();
 </script>
 </body>
 </html>
